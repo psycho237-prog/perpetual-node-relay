@@ -22,6 +22,11 @@ jobs:
       - name: Install Dependencies
         run: npm install
 
+      - name: Check Environment
+        run: node test-env.js
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+
       - name: Start WhatsApp Bot
         run: node server.js &
         env:
