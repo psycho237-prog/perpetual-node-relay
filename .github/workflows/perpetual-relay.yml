@@ -26,6 +26,7 @@ jobs:
         run: node server.js &
         env:
           PORT: 8080
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
 
       - name: Relay Pacing (5.5 Hours)
         run: |

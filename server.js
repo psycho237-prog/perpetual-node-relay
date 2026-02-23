@@ -99,7 +99,12 @@ async function connectToWhatsApp() {
 
     // Notification Scanner: Check for files in notifications/ folder (Cloud Polling)
     setInterval(async () => {
-        if (!isConnected || !process.env.GH_TOKEN) return;
+        if (!isConnected) return;
+
+        if (!process.env.GH_TOKEN) {
+            console.error('[Notification] GH_TOKEN is missing. Cannot poll cloud notifications.');
+            return;
+        }
 
         try {
             // 1. List files in notifications folder via API
@@ -117,9 +122,12 @@ async function connectToWhatsApp() {
                 const data = JSON.parse(decoded);
 
                 const message = data.message || "No message content.";
-                const ownerId = sock.user.id.split(':')[0] + '@s.whatsapp.net';
 
-                console.log(`[Cloud Notification] Sending: ${message}`);
+                // Robust owner ID detection (handling multi-device suffixes like :1)
+                const rawId = sock.user.id || state.creds.me.id;
+                const ownerId = rawId.split(':')[0].split('@')[0] + '@s.whatsapp.net';
+
+                console.log(`[Cloud Notification] Sending to ${ownerId}: ${message}`);
                 await sock.sendMessage(ownerId, { text: `🔔 *Notification:*\n\n${message}` });
 
                 // 3. Delete file via API
