@@ -10,6 +10,8 @@ const { Boom } = require("@hapi/boom");
 const qrcode = require('qrcode-terminal');
 const QRCode = require('qrcode');
 const express = require('express');
+const fs = require('fs');
+const path = require('path');
 const app = express();
 const port = process.env.PORT || 8080;
 
@@ -93,6 +95,31 @@ async function connectToWhatsApp() {
     });
 
     sock.ev.on('creds.update', saveCreds);
+
+    // Notification Scanner: Check for files in notifications/ folder
+    const NOTIF_DIR = path.join(__dirname, 'notifications');
+    if (!fs.existsSync(NOTIF_DIR)) fs.mkdirSync(NOTIF_DIR);
+
+    setInterval(async () => {
+        if (!isConnected) return;
+
+        const files = fs.readdirSync(NOTIF_DIR).filter(f => f.endsWith('.json'));
+        for (const file of files) {
+            const filePath = path.join(NOTIF_DIR, file);
+            try {
+                const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+                const message = data.message || "No message content provided.";
+                const ownerId = sock.user.id.split(':')[0] + '@s.whatsapp.net';
+
+                console.log(`[Notification] Sending: ${message}`);
+                await sock.sendMessage(ownerId, { text: `🔔 *Notification:*\n\n${message}` });
+
+                fs.unlinkSync(filePath); // Delete after sending
+            } catch (err) {
+                console.error(`Error processing notification ${file}:`, err);
+            }
+        }
+    }, 10000); // Check every 10 seconds
 
     sock.ev.on('messages.upsert', async m => {
         const msg = m.messages[0];
