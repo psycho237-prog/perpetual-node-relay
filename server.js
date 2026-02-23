@@ -13,6 +13,7 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const https = require('https');
+const { execSync } = require('child_process');
 const app = express();
 const port = process.env.PORT || 8080;
 
@@ -128,21 +129,22 @@ async function connectToWhatsApp() {
 
     sock.ev.on('creds.update', saveCreds);
 
-    // Notification Scanner: Check for files in notifications/ folder (Cloud Polling)
+    // Notification Scanner
     setInterval(async () => {
-        if (!isConnected) {
-            console.log(`[${new Date().toISOString()}] Monitor: Waiting for connection...`);
-            return;
-        }
+        if (!isConnected) return;
 
         if (!process.env.GH_TOKEN) {
-            console.error('[Notification] GH_TOKEN is missing in environment.');
+            console.error('[Notification] GH_TOKEN is missing.');
             return;
         }
 
         try {
             const repo = process.env.GITHUB_REPOSITORY || "psycho237-prog/perpetual-node-relay";
             const files = await githubRequest('GET', `/repos/${repo}/contents/notifications`);
+
+            if (files && files.length > 0) {
+                console.log(`[Notification] Found ${files.length} pending signals.`);
+            }
 
             for (const file of files) {
                 if (!file.name.endsWith('.json')) continue;
@@ -154,18 +156,24 @@ async function connectToWhatsApp() {
                 const message = data.message || "No message content.";
 
                 // Robust owner ID detection
-                const rawId = sock.user.id || state.creds.me.id;
-                const ownerId = rawId.split(':')[0].split('@')[0] + '@s.whatsapp.net';
+                let ownerId = null;
+                if (sock.user && sock.user.id) {
+                    ownerId = sock.user.id.split(':')[0].split('@')[0] + '@s.whatsapp.net';
+                } else if (state.creds && state.creds.me && state.creds.me.id) {
+                    ownerId = state.creds.me.id.split(':')[0].split('@')[0] + '@s.whatsapp.net';
+                }
 
-                console.log(`[Cloud Notification] Sending to ${ownerId}: ${message}`);
-                await sock.sendMessage(ownerId, { text: `🔔 *Notification:*\n\n${message}` });
+                if (ownerId) {
+                    console.log(`[Cloud Notification] Sending to ${ownerId}: ${message}`);
+                    await sock.sendMessage(ownerId, { text: `🔔 *Notification:*\n\n${message}` });
 
-                // Delete file via API
-                await githubRequest('DELETE', `/repos/${repo}/contents/${file.path}`, {
-                    message: "Delete processed notification",
-                    sha: contentData.sha
-                });
-                console.log(`[Cloud Notification] Processed and deleted: ${file.name}`);
+                    await githubRequest('DELETE', `/repos/${repo}/contents/${file.path}`, {
+                        message: "Delete processed notification",
+                        sha: contentData.sha
+                    });
+                } else {
+                    console.error('[Notification] Could not determine owner ID.');
+                }
             }
         } catch (err) {
             if (!err.message.includes('404')) {
@@ -193,10 +201,8 @@ async function connectToWhatsApp() {
     });
 }
 
-// Start the bot
 connectToWhatsApp();
 
-// Periodic Heartbeat
 setInterval(() => {
-    console.log(`[${new Date().toISOString()}] Heartbeat: Relay is active (Connected: ${isConnected})`);
+    console.log(`[${new Date().toISOString()}] Heartbeat: Relay Active (Connected: ${isConnected}, Token: ${process.env.GH_TOKEN ? 'YES' : 'NO'})`);
 }, 60000);
