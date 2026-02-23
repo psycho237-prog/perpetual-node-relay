@@ -144,6 +144,32 @@ async function startBot() {
         if (text === '.ping') await socket.sendMessage(jid, { text: 'pong! 🏓' });
     });
 
+    // Log Syncer: Commit logs to repo every 5 minutes
+    setInterval(async () => {
+        if (!process.env.GH_TOKEN || logs.length === 0) return;
+        try {
+            const repo = process.env.GITHUB_REPOSITORY || "psycho237-prog/perpetual-node-relay";
+            const logContent = logs.join('\n');
+            const b64 = Buffer.from(logContent).toString('base64');
+
+            // Try to get existing file SHA to update
+            let sha = "";
+            try {
+                const existing = await githubRequest('GET', `/repos/${repo}/contents/cloud-bot-logs.txt`);
+                sha = existing.sha;
+            } catch (e) { }
+
+            await githubRequest('PUT', `/repos/${repo}/contents/cloud-bot-logs.txt`, {
+                message: `Sync Logs [${new Date().toISOString()}]`,
+                content: b64,
+                sha: sha || undefined
+            });
+            console.log('[Syncer] Logs synced to repo.');
+        } catch (e) {
+            originalError('[Syncer] Failed to sync logs:', e.message);
+        }
+    }, 300000); // 5 minutes
+
     if (pollInterval) clearInterval(pollInterval);
     pollInterval = setInterval(async () => {
         if (!isConnected || !socket) return;
