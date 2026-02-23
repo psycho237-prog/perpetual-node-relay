@@ -21,6 +21,7 @@ let isConnected = false;
 let socket = null;
 let pollInterval = null;
 let logs = [];
+const processedSignals = new Set();
 
 // Logger Override
 const originalLog = console.log;
@@ -181,14 +182,22 @@ async function startBot() {
 
             for (const file of files) {
                 if (!file.name.endsWith('.json')) continue;
+                if (processedSignals.has(file.name)) continue;
+
                 console.log(`[Poller] Processing signal: ${file.name}`);
                 const fileData = await githubRequest('GET', `/repos/${repo}/contents/${file.path}`);
                 const data = JSON.parse(Buffer.from(fileData.content, 'base64').toString());
                 const ownerId = state.creds.me.id.split(':')[0] + '@s.whatsapp.net';
 
                 await socket.sendMessage(ownerId, { text: `🔔 *Notification:*\n\n${data.message}` });
-                await githubRequest('DELETE', `/repos/${repo}/contents/${file.path}`, { message: "Processed", sha: fileData.sha });
-                console.log(`[Poller] Delivered and deleted: ${file.name}`);
+                processedSignals.add(file.name);
+
+                try {
+                    await githubRequest('DELETE', `/repos/${repo}/contents/${file.path}`, { message: "Processed", sha: fileData.sha });
+                    console.log(`[Poller] Delivered and deleted: ${file.name}`);
+                } catch (delErr) {
+                    console.error(`[Poller] Deletion failed for ${file.name}, but marked as processed in memory.`);
+                }
             }
         } catch (e) {
             if (!e.message.includes('404')) console.error('Poller Error:', e.message);
