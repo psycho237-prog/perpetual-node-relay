@@ -1,24 +1,118 @@
+const {
+    default: makeWASocket,
+    useMultiFileAuthState,
+    DisconnectReason,
+    fetchLatestBaileysVersion,
+    makeCacheableSignalKeyStore
+} = require("@whiskeysockets/baileys");
+const P = require("pino");
+const { Boom } = require("@hapi/boom");
+const qrcode = require('qrcode-terminal');
+const QRCode = require('qrcode');
 const express = require('express');
 const app = express();
 const port = process.env.PORT || 8080;
 
-app.get('/', (req, res) => {
-    res.send('Perpetual Relay Active');
+let currentQr = null;
+let isConnected = false;
+
+// Express Server for Health Checks & QR Display
+app.get('/', async (req, res) => {
+    if (isConnected) {
+        return res.send('<h1>WhatsApp Bot Relay Active</h1><p>The bot is successfully connected.</p>');
+    }
+
+    if (currentQr) {
+        try {
+            const qrDataUri = await QRCode.toDataURL(currentQr);
+            return res.send(`
+                <html>
+                    <head>
+                        <title>Scan WhatsApp QR</title>
+                        <meta http-equiv="refresh" content="10">
+                        <style>
+                            body { background: #111; color: #fff; font-family: sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; }
+                            img { border: 10px solid white; border-radius: 10px; }
+                        </style>
+                    </head>
+                    <body>
+                        <h1>Scan to Connect</h1>
+                        <img src="${qrDataUri}" />
+                        <p>Refreshing every 10 seconds...</p>
+                    </body>
+                </html>
+            `);
+        } catch (err) {
+            return res.status(500).send('Error generating QR code');
+        }
+    }
+
+    res.send('<h1>Initializing...</h1><p>Please wait while the bot prepares the QR code.</p><script>setTimeout(() => location.reload(), 2000)</script>');
 });
 
-const server = app.listen(port, () => {
-    console.log(`[${new Date().toISOString()}] Server running on port ${port}`);
+app.listen(port, () => {
+    console.log(`[${new Date().toISOString()}] Health check server running on port ${port}`);
 });
+
+async function connectToWhatsApp() {
+    const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
+    const { version, isLatest } = await fetchLatestBaileysVersion();
+    console.log(`using WA v${version.join('.')}, isLatest: ${isLatest}`);
+
+    const sock = makeWASocket({
+        version,
+        auth: {
+            creds: state.creds,
+            keys: makeCacheableSignalKeyStore(state.keys, P({ level: 'silent' })),
+        },
+        printQRInTerminal: true,
+        logger: P({ level: 'silent' })
+    });
+
+    sock.ev.on('connection.update', (update) => {
+        const { connection, lastDisconnect, qr } = update;
+        if (qr) {
+            currentQr = qr;
+            console.log('--- SCAN QR CODE ---');
+            qrcode.generate(qr, { small: true });
+            console.log('Or visit the server URL to see the QR code on a web page.');
+        }
+        if (connection === 'close') {
+            isConnected = false;
+            currentQr = null;
+            const shouldReconnect = (lastDisconnect.error instanceof Boom) ? lastDisconnect.error.output.statusCode !== DisconnectReason.loggedOut : true;
+            console.log('connection closed due to ', lastDisconnect.error, ', reconnecting ', shouldReconnect);
+            if (shouldReconnect) {
+                connectToWhatsApp();
+            }
+        } else if (connection === 'open') {
+            console.log('opened connection');
+            isConnected = true;
+            currentQr = null;
+        }
+    });
+
+    sock.ev.on('creds.update', saveCreds);
+
+    sock.ev.on('messages.upsert', async m => {
+        const msg = m.messages[0];
+        if (!msg.message || msg.key.fromMe) return;
+
+        const remoteJid = msg.key.remoteJid;
+        const text = msg.message.conversation || msg.message.extendedTextMessage?.text;
+
+        if (text === '.ping') {
+            await sock.sendMessage(remoteJid, { text: 'pong! 🏓' });
+        } else if (text === '.menu') {
+            await sock.sendMessage(remoteJid, { text: '*Available Commands:*\n\n.ping - Check bot response\n.menu - Show this list' });
+        }
+    });
+}
+
+// Start the bot
+connectToWhatsApp();
 
 // Periodic Heartbeat
 setInterval(() => {
-    console.log(`[${new Date().toISOString()}] Heartbeat: Process is alive and running...`);
-}, 60000); // Every minute
-
-// Graceful shutdown
-process.on('SIGTERM', () => {
-    console.log('Received SIGTERM, shutting down...');
-    server.close(() => {
-        process.exit(0);
-    });
-});
+    console.log(`[${new Date().toISOString()}] Heartbeat: Relay is active...`);
+}, 60000);

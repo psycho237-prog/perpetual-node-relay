@@ -1,4 +1,4 @@
-name: Perpetual Node Relay
+name: Perpetual Node Relay (WA Bot)
 
 on:
   repository_dispatch:
@@ -11,6 +11,8 @@ jobs:
     steps:
       - name: Checkout Repo
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -20,29 +22,35 @@ jobs:
       - name: Install Dependencies
         run: npm install
 
-      - name: Start Server in Background
+      - name: Start WhatsApp Bot
         run: node server.js &
         env:
           PORT: 8080
 
-      - name: Relay Pacing
+      - name: Relay Pacing (5.5 Hours)
         run: |
-          echo "Process started at $(date)"
-          # We wait for 5 hours and 30 minutes (19800 seconds)
-          # This leaves 30 minutes for the handoff to occur
+          echo "Bot started at $(date)"
           sleep 19800
-          echo "Tagging the next runner..."
+          echo "Handoff sequence initiated..."
 
-      - name: Trigger Successor
+      - name: Save Session & Trigger Successor
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Stage the auth folder and any state changes
+          git add auth_info_baileys/ state.json || true
+          git commit -m "Sync WA session data before handoff" || echo "No session changes to commit"
+          git push origin main || echo "Push failed (potential conflict), proceeding with trigger"
+
+          # Trigger the relay
           curl -X POST \
             -H "Accept: application/vnd.github+json" \
             -H "Authorization: Bearer $GH_TOKEN" \
             https://api.github.com/repos/${{ github.repository }}/dispatches \
             -d '{"event_type": "update-relay"}'
           
-          echo "Successor triggered at $(date). Shutting down current process..."
-          # Give a small buffer for the successor to start before this one dies
+          echo "Successor triggered. Final sleep (1m) for graceful transition..."
           sleep 60
