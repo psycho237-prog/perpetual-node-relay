@@ -12,6 +12,7 @@ const QRCode = require('qrcode');
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
+const { execSync } = require('child_process');
 const app = express();
 const port = process.env.PORT || 8080;
 
