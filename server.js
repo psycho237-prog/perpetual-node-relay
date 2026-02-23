@@ -179,11 +179,15 @@ async function connectToWhatsApp() {
         if (!msg.message || msg.key.fromMe) return;
 
         const remoteJid = msg.key.remoteJid;
-        const text = msg.message.conversation || msg.message.extendedTextMessage?.text;
+        const text = msg.message.conversation || msg.message.extendedTextMessage?.text || msg.message.buttonsResponseMessage?.selectedButtonId || msg.message.listResponseMessage?.singleSelectReply?.selectedRowId;
+
+        console.log(`[Message] From: ${remoteJid}, Text: ${text}`);
 
         if (text === '.ping') {
+            console.log('[Command] Executing .ping');
             await sock.sendMessage(remoteJid, { text: 'pong! 🏓' });
         } else if (text === '.menu') {
+            console.log('[Command] Executing .menu');
             await sock.sendMessage(remoteJid, { text: '*Available Commands:*\n\n.ping - Check bot response\n.menu - Show this list' });
         }
     });
