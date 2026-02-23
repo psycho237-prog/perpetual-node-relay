@@ -12,7 +12,7 @@ const QRCode = require('qrcode');
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
-const { execSync } = require('child_process');
+const https = require('https');
 const app = express();
 const port = process.env.PORT || 8080;
 
@@ -57,6 +57,38 @@ app.listen(port, () => {
     console.log(`[${new Date().toISOString()}] Health check server running on port ${port}`);
 });
 
+function githubRequest(method, urlPath, body = null) {
+    return new Promise((resolve, reject) => {
+        const options = {
+            hostname: 'api.github.com',
+            path: urlPath,
+            method: method,
+            headers: {
+                'Authorization': `Bearer ${process.env.GH_TOKEN}`,
+                'User-Agent': 'WhatsApp-Bot-Relay',
+                'Accept': 'application/vnd.github.v3+json',
+                'Content-Type': 'application/json'
+            }
+        };
+
+        const req = https.request(options, (res) => {
+            let data = '';
+            res.on('data', (chunk) => data += chunk);
+            res.on('end', () => {
+                if (res.statusCode >= 200 && res.statusCode < 300) {
+                    resolve(data ? JSON.parse(data) : null);
+                } else {
+                    reject(new Error(`GitHub API Error: ${res.statusCode} - ${data}`));
+                }
+            });
+        });
+
+        req.on('error', (e) => reject(e));
+        if (body) req.write(JSON.stringify(body));
+        req.end();
+    });
+}
+
 async function connectToWhatsApp() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
     const { version, isLatest } = await fetchLatestBaileysVersion();
@@ -68,7 +100,6 @@ async function connectToWhatsApp() {
             creds: state.creds,
             keys: makeCacheableSignalKeyStore(state.keys, P({ level: 'silent' })),
         },
-        printQRInTerminal: true,
         logger: P({ level: 'silent' })
     });
 
@@ -99,47 +130,49 @@ async function connectToWhatsApp() {
 
     // Notification Scanner: Check for files in notifications/ folder (Cloud Polling)
     setInterval(async () => {
-        if (!isConnected) return;
+        if (!isConnected) {
+            console.log(`[${new Date().toISOString()}] Monitor: Waiting for connection...`);
+            return;
+        }
 
         if (!process.env.GH_TOKEN) {
-            console.error('[Notification] GH_TOKEN is missing. Cannot poll cloud notifications.');
+            console.error('[Notification] GH_TOKEN is missing in environment.');
             return;
         }
 
         try {
-            // 1. List files in notifications folder via API
             const repo = process.env.GITHUB_REPOSITORY || "psycho237-prog/perpetual-node-relay";
-            const filesJson = execSync(`gh api /repos/${repo}/contents/notifications`).toString();
-            const files = JSON.parse(filesJson);
+            const files = await githubRequest('GET', `/repos/${repo}/contents/notifications`);
 
             for (const file of files) {
                 if (!file.name.endsWith('.json')) continue;
 
-                // 2. Fetch file content
-                const contentJson = execSync(`gh api /repos/${repo}/contents/${file.path}`).toString();
-                const contentData = JSON.parse(contentJson);
+                const contentData = await githubRequest('GET', `/repos/${repo}/contents/${file.path}`);
                 const decoded = Buffer.from(contentData.content, 'base64').toString('utf8');
                 const data = JSON.parse(decoded);
 
                 const message = data.message || "No message content.";
 
-                // Robust owner ID detection (handling multi-device suffixes like :1)
+                // Robust owner ID detection
                 const rawId = sock.user.id || state.creds.me.id;
                 const ownerId = rawId.split(':')[0].split('@')[0] + '@s.whatsapp.net';
 
                 console.log(`[Cloud Notification] Sending to ${ownerId}: ${message}`);
                 await sock.sendMessage(ownerId, { text: `🔔 *Notification:*\n\n${message}` });
 
-                // 3. Delete file via API
-                execSync(`gh api --method DELETE /repos/${repo}/contents/${file.path} -f message="Delete processed notification" -f sha="${contentData.sha}"`);
+                // Delete file via API
+                await githubRequest('DELETE', `/repos/${repo}/contents/${file.path}`, {
+                    message: "Delete processed notification",
+                    sha: contentData.sha
+                });
+                console.log(`[Cloud Notification] Processed and deleted: ${file.name}`);
             }
         } catch (err) {
-            // Ignore 404s if folder is empty/not found
             if (!err.message.includes('404')) {
                 console.error(`Error polling notifications:`, err.message);
             }
         }
-    }, 20000); // Check every 20 seconds
+    }, 20000);
 
     sock.ev.on('messages.upsert', async m => {
         const msg = m.messages[0];
@@ -161,5 +194,5 @@ connectToWhatsApp();
 
 // Periodic Heartbeat
 setInterval(() => {
-    console.log(`[${new Date().toISOString()}] Heartbeat: Relay is active...`);
+    console.log(`[${new Date().toISOString()}] Heartbeat: Relay is active (Connected: ${isConnected})`);
 }, 60000);
